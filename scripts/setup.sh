@@ -609,20 +609,23 @@ setup_nginx() {
   
   local site_avail="/etc/nginx/sites-available/$APP_NAME"
   local site_enabled="/etc/nginx/sites-enabled/$APP_NAME"
+  local nginx_port
+  nginx_port="$(get_env_var NGINX_PORT)"
+  nginx_port="${nginx_port:-80}"
   
-  $SUDO tee "$site_avail" >/dev/null <<'NGINX'
+  $SUDO tee "$site_avail" >/dev/null <<NGINX
 server {
-    listen 80;
+    listen ${nginx_port};
     server_name _;
 
     location / {
         proxy_pass http://127.0.0.1:4001;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Upgrade \$http_upgrade;
     }
 }
 NGINX
@@ -634,11 +637,11 @@ NGINX
   $SUDO systemctl enable nginx >/dev/null 2>&1 || true
   $SUDO systemctl restart nginx || $SUDO systemctl reload nginx
   
-  command -v ufw >/dev/null 2>&1 && $SUDO ufw allow 80/tcp || true
+  command -v ufw >/dev/null 2>&1 && $SUDO ufw allow "${nginx_port}/tcp" || true
   
   local public_ip
   public_ip=$(get_public_ip)
-  ok "Nginx настроен"
+  ok "Nginx настроен на порту ${nginx_port}"
 }
 
 # Показывает финальную информацию
@@ -666,16 +669,21 @@ show_completion() {
   
   section "Информация для доступа"
   
-  local public_ip api_key
+  local public_ip api_key nginx_port
   public_ip=$(get_public_ip)
   api_key="$(get_env_var FASTIFY_API_KEY)"
+  nginx_port="$(get_env_var NGINX_PORT)"
+  nginx_port="${nginx_port:-80}"
+  
+  local port_suffix=""
+  [ "$nginx_port" != "80" ] && port_suffix=":$nginx_port"
   
   if [ -n "$public_ip" ]; then
-    kv "API URL" "http://$public_ip/"
-    kv "Swagger" "http://$public_ip/docs"
+    kv "API URL" "http://$public_ip$port_suffix/"
+    kv "Swagger" "http://$public_ip$port_suffix/docs"
   else
-    kv "API URL" "http://localhost/"
-    kv "Swagger" "http://localhost/docs"
+    kv "API URL" "http://localhost$port_suffix/"
+    kv "Swagger" "http://localhost$port_suffix/docs"
   fi
   
   if [ -n "$api_key" ]; then
