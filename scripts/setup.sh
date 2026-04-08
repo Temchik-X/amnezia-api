@@ -7,6 +7,7 @@ readonly ENV_EXAMPLE="$ROOT_DIR/.env.example"
 readonly ENV_FILE="$ROOT_DIR/.env"
 IS_UPDATE=0
 INSTALL_MODE="" # pm2 | docker
+SKIP_BUILD=0
 
 LOG_FILE="$(mktemp /tmp/amnezia-api-setup.XXXXXX.log 2>/dev/null || echo "/tmp/amnezia-api-setup.$$.$RANDOM.log")"
 cleanup() {
@@ -530,14 +531,17 @@ deploy_docker() {
 
   ensure_docker_compose || return 1
 
+  local build_flag="--build"
+  [ "${SKIP_BUILD:-0}" -eq 1 ] && build_flag=""
+
   if $SUDO docker compose version >/dev/null 2>&1; then
-    $SUDO docker compose -f "$ROOT_DIR/docker-compose.yml" up -d --build
+    $SUDO docker compose -f "$ROOT_DIR/docker-compose.yml" up -d $build_flag
     ok "Контейнеры запущены (docker compose)"
     return 0
   fi
 
   if command -v docker-compose >/dev/null 2>&1; then
-    $SUDO docker-compose -f "$ROOT_DIR/docker-compose.yml" up -d --build
+    $SUDO docker-compose -f "$ROOT_DIR/docker-compose.yml" up -d $build_flag
     ok "Контейнеры запущены (docker-compose)"
     return 0
   fi
@@ -743,6 +747,12 @@ show_completion() {
 
 # Основная функция
 main() {
+  for arg in "$@"; do
+    case "$arg" in
+      --skip-build) SKIP_BUILD=1 ;;
+    esac
+  done
+
   if [ -f "$ENV_FILE" ]; then
     IS_UPDATE=1
   else
