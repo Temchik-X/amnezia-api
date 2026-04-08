@@ -531,13 +531,13 @@ deploy_docker() {
   ensure_docker_compose || return 1
 
   if $SUDO docker compose version >/dev/null 2>&1; then
-    run_quiet "docker compose up" $SUDO docker compose -f "$ROOT_DIR/docker-compose.yml" up -d --build
+    $SUDO docker compose -f "$ROOT_DIR/docker-compose.yml" up -d --build
     ok "Контейнеры запущены (docker compose)"
     return 0
   fi
 
   if command -v docker-compose >/dev/null 2>&1; then
-    run_quiet "docker-compose up" $SUDO docker-compose -f "$ROOT_DIR/docker-compose.yml" up -d --build
+    $SUDO docker-compose -f "$ROOT_DIR/docker-compose.yml" up -d --build
     ok "Контейнеры запущены (docker-compose)"
     return 0
   fi
