@@ -478,6 +478,12 @@ setup_env() {
     fi
   done
   
+  # Домен для HTTPS
+  local current_ssl_domain input_ssl_domain
+  current_ssl_domain="$(get_env_var NGINX_SSL_DOMAIN)"
+  read -r -p "$(printf "%b" "${C_BOLD}Введите NGINX_SSL_DOMAIN${C_RESET} (домен для HTTPS, оставьте пустым для HTTP) [${current_ssl_domain:-пропустить}]: ")" input_ssl_domain || true
+  [ -n "$input_ssl_domain" ] && upsert_env_var NGINX_SSL_DOMAIN "$input_ssl_domain"
+
   # Публичный IP
   local auto_public_ip
   auto_public_ip=$(get_public_ip)
@@ -601,19 +607,54 @@ setup_xray_stats() {
 # Настраивает Nginx
 setup_nginx() {
   step "[6/6] Установка и настройка Nginx"
-  
+
   if ! command -v nginx >/dev/null 2>&1; then
     $SUDO apt-get update -y
     $SUDO apt-get install -y nginx
   fi
-  
+
   local site_avail="/etc/nginx/sites-available/$APP_NAME"
   local site_enabled="/etc/nginx/sites-enabled/$APP_NAME"
-  local nginx_port
+  local nginx_port ssl_domain
   nginx_port="$(get_env_var NGINX_PORT)"
-  nginx_port="${nginx_port:-80}"
-  
-  $SUDO tee "$site_avail" >/dev/null <<NGINX
+  ssl_domain="$(get_env_var NGINX_SSL_DOMAIN)"
+
+  if [ -n "$ssl_domain" ]; then
+    nginx_port="${nginx_port:-443}"
+    local cert_dir="/root/cert/$ssl_domain"
+
+    $SUDO tee "$site_avail" >/dev/null <<NGINX
+server {
+    listen 80;
+    server_name ${ssl_domain};
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen ${nginx_port} ssl;
+    server_name ${ssl_domain};
+
+    ssl_certificate ${cert_dir}/fullchain.pem;
+    ssl_certificate_key ${cert_dir}/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:4001;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Upgrade \$http_upgrade;
+    }
+}
+NGINX
+
+    command -v ufw >/dev/null 2>&1 && $SUDO ufw allow "80/tcp" || true
+    command -v ufw >/dev/null 2>&1 && $SUDO ufw allow "${nginx_port}/tcp" || true
+  else
+    nginx_port="${nginx_port:-80}"
+
+    $SUDO tee "$site_avail" >/dev/null <<NGINX
 server {
     listen ${nginx_port};
     server_name _;
@@ -629,19 +670,18 @@ server {
     }
 }
 NGINX
-  
+
+    command -v ufw >/dev/null 2>&1 && $SUDO ufw allow "${nginx_port}/tcp" || true
+  fi
+
   [ ! -e "$site_enabled" ] && $SUDO ln -sfn "$site_avail" "$site_enabled"
   [ -e /etc/nginx/sites-enabled/default ] && $SUDO rm -f /etc/nginx/sites-enabled/default
-  
+
   $SUDO nginx -t
   $SUDO systemctl enable nginx >/dev/null 2>&1 || true
   $SUDO systemctl restart nginx || $SUDO systemctl reload nginx
-  
-  command -v ufw >/dev/null 2>&1 && $SUDO ufw allow "${nginx_port}/tcp" || true
-  
-  local public_ip
-  public_ip=$(get_public_ip)
-  ok "Nginx настроен на порту ${nginx_port}"
+
+  ok "Nginx настроен на порту ${nginx_port}$([ -n "$ssl_domain" ] && echo " (HTTPS, домен: $ssl_domain)" || true)"
 }
 
 # Показывает финальную информацию
@@ -669,21 +709,29 @@ show_completion() {
   
   section "Информация для доступа"
   
-  local public_ip api_key nginx_port
+  local public_ip api_key nginx_port ssl_domain port_suffix
   public_ip=$(get_public_ip)
   api_key="$(get_env_var FASTIFY_API_KEY)"
   nginx_port="$(get_env_var NGINX_PORT)"
-  nginx_port="${nginx_port:-80}"
-  
-  local port_suffix=""
-  [ "$nginx_port" != "80" ] && port_suffix=":$nginx_port"
-  
-  if [ -n "$public_ip" ]; then
-    kv "API URL" "http://$public_ip$port_suffix/"
-    kv "Swagger" "http://$public_ip$port_suffix/docs"
+  ssl_domain="$(get_env_var NGINX_SSL_DOMAIN)"
+
+  if [ -n "$ssl_domain" ]; then
+    nginx_port="${nginx_port:-443}"
+    port_suffix=""
+    [ "$nginx_port" != "443" ] && port_suffix=":$nginx_port"
+    kv "API URL" "https://$ssl_domain$port_suffix/"
+    kv "Swagger" "https://$ssl_domain$port_suffix/docs"
   else
-    kv "API URL" "http://localhost$port_suffix/"
-    kv "Swagger" "http://localhost$port_suffix/docs"
+    nginx_port="${nginx_port:-80}"
+    port_suffix=""
+    [ "$nginx_port" != "80" ] && port_suffix=":$nginx_port"
+    if [ -n "$public_ip" ]; then
+      kv "API URL" "http://$public_ip$port_suffix/"
+      kv "Swagger" "http://$public_ip$port_suffix/docs"
+    else
+      kv "API URL" "http://localhost$port_suffix/"
+      kv "Swagger" "http://localhost$port_suffix/docs"
+    fi
   fi
   
   if [ -n "$api_key" ]; then
